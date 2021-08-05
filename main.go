@@ -206,7 +206,7 @@ func main() {
 				continue
 			}
 			verdict := (*C.char)(unsafe.Pointer(&event.Verdict))
-			fmt.Printf("%d %d %s\n", event.Source, event.Dest, C.GoString(verdict))
+			fmt.Printf("%v %v %s\n", int2ip(event.Source), int2ip(event.Dest), C.GoString(verdict))
 		}
 	}()
 
