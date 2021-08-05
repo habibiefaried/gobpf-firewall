@@ -1,10 +1,10 @@
 package main
 
 import (
-	"net"
 	"encoding/binary"
-	"unsafe"
 	"fmt"
+	"net"
+	"unsafe"
 )
 
 // Bigger than we need, not too big to worry about overflow
@@ -66,18 +66,18 @@ func ParseIPv4ToUint32(s string) uint32 {
 	return nativeEndian.Uint32(p[:4])
 }
 
-func setEndianness(){
+func setEndianness() {
 	endtest := [2]byte{}
-    *(*uint16)(unsafe.Pointer(&endtest[0])) = uint16(0xABCD)
+	*(*uint16)(unsafe.Pointer(&endtest[0])) = uint16(0xABCD)
 
-    switch endtest {
-    case [2]byte{0xCD, 0xAB}:
-    	fmt.Println("Set to LittleEndian")
-        nativeEndian = binary.LittleEndian
-    case [2]byte{0xAB, 0xCD}:
-    	fmt.Println("Set to BigEndian")
-        nativeEndian = binary.BigEndian
-    default:
-        panic("Could not determine native endianness.")
-    }
+	switch endtest {
+	case [2]byte{0xCD, 0xAB}:
+		fmt.Println("Set to LittleEndian")
+		nativeEndian = binary.LittleEndian
+	case [2]byte{0xAB, 0xCD}:
+		fmt.Println("Set to BigEndian")
+		nativeEndian = binary.BigEndian
+	default:
+		panic("Could not determine native endianness.")
+	}
 }

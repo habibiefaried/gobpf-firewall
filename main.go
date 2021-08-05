@@ -41,7 +41,6 @@ typedef struct {
 } chown_event_t;
 
 BPF_PERF_OUTPUT(chown_events);
-BPF_TABLE("array", int, long, dropcnt, 256);
 BPF_HASH(allowtable, struct allowtablestr, u32, 256);
 
 static inline void copyStr(char a[], char b[]){
@@ -77,15 +76,7 @@ static inline int parse_ipv4(struct xdp_md *ctx, void *data, u64 nh_off, void *d
 		chown_events.perf_submit(ctx, &event, sizeof(event));
     }
 
-    return iph->protocol;
-}
-
-static inline int parse_ipv6(void *data, u64 nh_off, void *data_end) {
-    struct ipv6hdr *ip6h = data + nh_off;
-
-    if ((void*)&ip6h[1] > data_end)
-        return 0;
-    return ip6h->nexthdr;
+    return XDP_PASS;
 }
 
 int xdp_prog1(struct xdp_md *ctx) {
@@ -99,7 +90,6 @@ int xdp_prog1(struct xdp_md *ctx) {
     long *value;
     uint16_t h_proto;
     uint64_t nh_off = 0;
-    int index;
 
     nh_off = sizeof(*eth);
 
@@ -130,16 +120,9 @@ int xdp_prog1(struct xdp_md *ctx) {
     }
 
     if (h_proto == htons(ETH_P_IP))
-       index = parse_ipv4(ctx, data, nh_off, data_end);
-    else if (h_proto == htons(ETH_P_IPV6))
-       index = parse_ipv6(data, nh_off, data_end);
+    	return parse_ipv4(ctx, data, nh_off, data_end);
     else
-       index = 0;
-
-    value = dropcnt.lookup(&index);
-    if (value) lock_xadd(value, 1);
-
-    return XDP_PASS;
+    	return XDP_PASS;
 }
 `
 
@@ -150,8 +133,8 @@ type chownEvent struct {
 }
 
 type allowTable struct {
-   Source  uint32
-   Dest    uint32
+	Source uint32
+	Dest   uint32
 }
 
 var nativeEndian binary.ByteOrder
@@ -159,7 +142,7 @@ var nativeEndian binary.ByteOrder
 func main() {
 	var device string
 	setEndianness()
-	
+
 	if len(os.Args) != 2 {
 		fmt.Printf("Usage: %v <ifdev>\n", os.Args[0])
 		fmt.Printf("e.g.: %v eth0\n", os.Args[0])
@@ -196,8 +179,6 @@ func main() {
 	signal.Notify(sig, os.Interrupt, os.Kill)
 
 	/* Initialize bpf map table */
-	dropcnt := bpf.NewTable(module.TableId("dropcnt"), module)
-
 	table := bpf.NewTable(module.TableId("chown_events"), module)
 	channel := make(chan []byte)
 	lostChannel := make(chan uint64)
@@ -210,10 +191,10 @@ func main() {
 	/* */
 
 	vals := make([]byte, 4)
-    nativeEndian.PutUint32(vals, 25)
-    buf := new(bytes.Buffer)
-    _ = binary.Write(buf, nativeEndian, allowTable{Source: 20490432, Dest: 1832429760})
-    allowtable.Set(buf.Bytes(), vals)
+	nativeEndian.PutUint32(vals, 25)
+	buf := new(bytes.Buffer)
+	_ = binary.Write(buf, nativeEndian, allowTable{Source: 20490432, Dest: 1832429760})
+	allowtable.Set(buf.Bytes(), vals)
 
 	go func() {
 		var event chownEvent
@@ -232,14 +213,4 @@ func main() {
 	perfMap.Start() //polling the event, to feed the bidirectional channel
 
 	<-sig
-
-	fmt.Printf("\n{IP protocol-number}: {total dropped pkts}\n")
-	for it := dropcnt.Iter(); it.Next(); {
-		key := bpf.GetHostByteOrder().Uint32(it.Key())
-		value := bpf.GetHostByteOrder().Uint64(it.Leaf())
-
-		if value > 0 {
-			fmt.Printf("%v: %v pkts\n", key, value)
-		}
-	}
 }
