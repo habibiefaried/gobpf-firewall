@@ -49,7 +49,7 @@ typedef struct {
 
 BPF_PERF_OUTPUT(chown_events);
 BPF_TABLE("array", int, long, dropcnt, 256);
-BPF_HASH(allowtable, struct allowtablestr, int, 256);
+BPF_HASH(allowtable, struct allowtablestr, u32, 256);
 
 static inline void copyStr(char a[], char b[]){
 	int c = 0;
@@ -75,7 +75,7 @@ static inline int parse_ipv4(struct xdp_md *ctx, void *data, u64 nh_off, void *d
 	at.Source = iph->saddr;
 	at.Dest = iph->daddr;
 
-	int *result = allowtable.lookup(&at);
+	u32 *result = allowtable.lookup(&at);
     if (result) {
     	copyStr(event.Verdict,"PASS");
 		chown_events.perf_submit(ctx, &event, sizeof(event));
@@ -218,10 +218,10 @@ func main() {
 	/* */
 
 	vals := make([]byte, 4)
-    binary.LittleEndian.PutUint32(vals, 5)
+    binary.LittleEndian.PutUint32(vals, 25)
     buf := new(bytes.Buffer)
     _ = binary.Write(buf, binary.LittleEndian, allowTable{Source: 20490432, Dest: 1832429760})
-    allowtable.Set(buf.Bytes(),vals)
+    allowtable.Set(buf.Bytes(), vals)
 
 	go func() {
 		var event chownEvent
