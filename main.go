@@ -1,10 +1,3 @@
-// xdp_drop.go Drop incoming packets on XDP layer and count for which
-// protocol type. Based on:
-// https://github.com/iovisor/bcc/blob/master/examples/networking/xdp/xdp_drop_count.py
-//
-// Copyright (c) 2017 GustavoKatel
-// Licensed under the Apache License, Version 2.0 (the "License")
-
 package main
 
 import (
@@ -150,12 +143,6 @@ int xdp_prog1(struct xdp_md *ctx) {
 }
 `
 
-func usage() {
-	fmt.Printf("Usage: %v <ifdev>\n", os.Args[0])
-	fmt.Printf("e.g.: %v eth0\n", os.Args[0])
-	os.Exit(1)
-}
-
 type chownEvent struct {
 	Source  uint32
 	Dest    uint32
@@ -167,11 +154,16 @@ type allowTable struct {
    Dest    uint32
 }
 
+var nativeEndian binary.ByteOrder
+
 func main() {
 	var device string
-
+	setEndianness()
+	
 	if len(os.Args) != 2 {
-		usage()
+		fmt.Printf("Usage: %v <ifdev>\n", os.Args[0])
+		fmt.Printf("e.g.: %v eth0\n", os.Args[0])
+		os.Exit(1)
 	}
 	device = os.Args[1]
 
@@ -218,16 +210,16 @@ func main() {
 	/* */
 
 	vals := make([]byte, 4)
-    binary.LittleEndian.PutUint32(vals, 25)
+    nativeEndian.PutUint32(vals, 25)
     buf := new(bytes.Buffer)
-    _ = binary.Write(buf, binary.LittleEndian, allowTable{Source: 20490432, Dest: 1832429760})
+    _ = binary.Write(buf, nativeEndian, allowTable{Source: 20490432, Dest: 1832429760})
     allowtable.Set(buf.Bytes(), vals)
 
 	go func() {
 		var event chownEvent
 		for {
 			data := <-channel //retrieve from polling data
-			err := binary.Read(bytes.NewBuffer(data), binary.LittleEndian, &event)
+			err := binary.Read(bytes.NewBuffer(data), nativeEndian, &event)
 			if err != nil {
 				fmt.Printf("failed to decode received data: %s\n", err)
 				continue
