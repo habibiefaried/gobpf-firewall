@@ -36,7 +36,7 @@ const source string = `
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 
-struct allowtable {
+struct allowtablestr {
     u32 Source;
     u32 Dest;
 };
@@ -49,7 +49,7 @@ typedef struct {
 
 BPF_PERF_OUTPUT(chown_events);
 BPF_TABLE("array", int, long, dropcnt, 256);
-BPF_HASH(cache2, struct allowtable, int, 256);
+BPF_HASH(allowtable, struct allowtablestr, int, 256);
 
 static inline void copyStr(char a[], char b[]){
 	int c = 0;
@@ -66,11 +66,23 @@ static inline int parse_ipv4(struct xdp_md *ctx, void *data, u64 nh_off, void *d
     if ((void*)&iph[1] > data_end)
         return 0;
 
+    struct allowtablestr at = {};
     chown_event_t event = {};
+    
     event.Source = iph->saddr;
 	event.Dest = iph->daddr;
-	copyStr(event.Verdict,"PASS");
-	chown_events.perf_submit(ctx, &event, sizeof(event));
+
+	at.Source = iph->saddr;
+	at.Dest = iph->daddr;
+
+	int *result = allowtable.lookup(&at);
+    if (result) {
+    	copyStr(event.Verdict,"PASS");
+		chown_events.perf_submit(ctx, &event, sizeof(event));
+    } else {
+    	copyStr(event.Verdict,"DENIED");
+		chown_events.perf_submit(ctx, &event, sizeof(event));
+    }
 
     return iph->protocol;
 }
@@ -150,6 +162,11 @@ type chownEvent struct {
 	Verdict [256]byte
 }
 
+type allowTable struct {
+   Source  uint32
+   Dest    uint32
+}
+
 func main() {
 	var device string
 
@@ -197,7 +214,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to init perf map: %s\n", err)
 		os.Exit(1)
 	}
+	allowtable := bpf.NewTable(module.TableId("allowtable"), module)
 	/* */
+
+	vals := make([]byte, 4)
+    binary.LittleEndian.PutUint32(vals, 5)
+    buf := new(bytes.Buffer)
+    _ = binary.Write(buf, binary.LittleEndian, allowTable{Source: 20490432, Dest: 1832429760})
+    allowtable.Set(buf.Bytes(),vals)
 
 	go func() {
 		var event chownEvent
