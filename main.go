@@ -8,13 +8,13 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
+	bpf "github.com/iovisor/gobpf/bcc"
 	"os"
 	"os/signal"
 	"unsafe"
-    "encoding/binary"
-    "bytes"
-	bpf "github.com/iovisor/gobpf/bcc"
 )
 
 /*
@@ -36,6 +36,11 @@ const source string = `
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 
+struct allowtable {
+    u32 Source;
+    u32 Dest;
+};
+
 typedef struct {
 	u32 Source;
 	u32 Dest;
@@ -44,6 +49,7 @@ typedef struct {
 
 BPF_PERF_OUTPUT(chown_events);
 BPF_TABLE("array", int, long, dropcnt, 256);
+BPF_HASH(cache2, struct allowtable, int, 256);
 
 static inline void copyStr(char a[], char b[]){
 	int c = 0;
@@ -54,7 +60,7 @@ static inline void copyStr(char a[], char b[]){
 	a[c] = '\0';
 }
 
-static inline int parse_ipv4(struct CTXTYPE *ctx, void *data, u64 nh_off, void *data_end) {
+static inline int parse_ipv4(struct xdp_md *ctx, void *data, u64 nh_off, void *data_end) {
 	
     struct iphdr *iph = data + nh_off;
     if ((void*)&iph[1] > data_end)
@@ -77,7 +83,7 @@ static inline int parse_ipv6(void *data, u64 nh_off, void *data_end) {
     return ip6h->nexthdr;
 }
 
-int xdp_prog1(struct CTXTYPE *ctx) {
+int xdp_prog1(struct xdp_md *ctx) {
 
     void* data_end = (void*)(long)ctx->data_end;
     void* data = (void*)(long)ctx->data;
@@ -85,7 +91,6 @@ int xdp_prog1(struct CTXTYPE *ctx) {
     struct ethhdr *eth = data;
 
     // drop packets
-    int rc = RETURNCODE; // let pass XDP_PASS or redirect to tx via XDP_TX
     long *value;
     uint16_t h_proto;
     uint64_t nh_off = 0;
@@ -94,7 +99,7 @@ int xdp_prog1(struct CTXTYPE *ctx) {
     nh_off = sizeof(*eth);
 
     if (data + nh_off  > data_end)
-        return rc;
+        return XDP_PASS;
 
     h_proto = eth->h_proto;
 
@@ -106,7 +111,7 @@ int xdp_prog1(struct CTXTYPE *ctx) {
         vhdr = data + nh_off;
         nh_off += sizeof(struct vlan_hdr);
         if (data + nh_off > data_end)
-            return rc;
+            return XDP_PASS;
             h_proto = vhdr->h_vlan_encapsulated_proto;
     }
     if (h_proto == htons(ETH_P_8021Q) || h_proto == htons(ETH_P_8021AD)) {
@@ -115,21 +120,21 @@ int xdp_prog1(struct CTXTYPE *ctx) {
         vhdr = data + nh_off;
         nh_off += sizeof(struct vlan_hdr);
         if (data + nh_off > data_end)
-            return rc;
+            return XDP_PASS;
             h_proto = vhdr->h_vlan_encapsulated_proto;
     }
 
     if (h_proto == htons(ETH_P_IP))
-        index = parse_ipv4(ctx, data, nh_off, data_end);
+       index = parse_ipv4(ctx, data, nh_off, data_end);
     else if (h_proto == htons(ETH_P_IPV6))
        index = parse_ipv6(data, nh_off, data_end);
     else
-        index = 0;
+       index = 0;
 
     value = dropcnt.lookup(&index);
     if (value) lock_xadd(value, 1);
 
-    return rc;
+    return XDP_PASS;
 }
 `
 
@@ -140,9 +145,9 @@ func usage() {
 }
 
 type chownEvent struct {
-    Source          uint32
-    Dest          uint32
-    Verdict    [256]byte
+	Source  uint32
+	Dest    uint32
+	Verdict [256]byte
 }
 
 func main() {
@@ -151,16 +156,10 @@ func main() {
 	if len(os.Args) != 2 {
 		usage()
 	}
-
 	device = os.Args[1]
-
-	ret := "XDP_PASS"
-	ctxtype := "xdp_md"
 
 	module := bpf.NewModule(source, []string{
 		"-w",
-		"-DRETURNCODE=" + ret,
-		"-DCTXTYPE=" + ctxtype,
 	})
 	defer module.Close()
 
@@ -190,31 +189,31 @@ func main() {
 	/* Initialize bpf map table */
 	dropcnt := bpf.NewTable(module.TableId("dropcnt"), module)
 
-    table := bpf.NewTable(module.TableId("chown_events"), module)
-    channel := make(chan []byte)
-    lostChannel := make(chan uint64)
-    perfMap, err := bpf.InitPerfMap(table, channel, lostChannel)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Failed to init perf map: %s\n", err)
-        os.Exit(1)
-    }
-    /* */
+	table := bpf.NewTable(module.TableId("chown_events"), module)
+	channel := make(chan []byte)
+	lostChannel := make(chan uint64)
+	perfMap, err := bpf.InitPerfMap(table, channel, lostChannel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to init perf map: %s\n", err)
+		os.Exit(1)
+	}
+	/* */
 
-    go func() {
-        var event chownEvent
-        for {
-            data := <-channel //retrieve from polling data
-            err := binary.Read(bytes.NewBuffer(data), binary.LittleEndian, &event)
-            if err != nil {
-                fmt.Printf("failed to decode received data: %s\n", err)
-                continue
-            }
-            verdict := (*C.char)(unsafe.Pointer(&event.Verdict))
-            fmt.Printf("%d %d %s\n",event.Source, event.Dest, C.GoString(verdict))
-        }
-    }()
+	go func() {
+		var event chownEvent
+		for {
+			data := <-channel //retrieve from polling data
+			err := binary.Read(bytes.NewBuffer(data), binary.LittleEndian, &event)
+			if err != nil {
+				fmt.Printf("failed to decode received data: %s\n", err)
+				continue
+			}
+			verdict := (*C.char)(unsafe.Pointer(&event.Verdict))
+			fmt.Printf("%d %d %s\n", event.Source, event.Dest, C.GoString(verdict))
+		}
+	}()
 
-    perfMap.Start() //polling the event, to feed the bidirectional channel
+	perfMap.Start() //polling the event, to feed the bidirectional channel
 
 	<-sig
 
