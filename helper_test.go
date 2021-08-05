@@ -17,4 +17,7 @@ func TestParsing(t *testing.T){
 	}
 
 	t.Logf("%v", int2ip(20490432))
+	t.Logf("%v", ParseIPv4ToUint32("192.168.56.1"))
+	t.Logf("%v", int2ip(1832429760))
+	t.Logf("%v", ParseIPv4ToUint32("192.168.56.109"))
 }
